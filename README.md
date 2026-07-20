@@ -1,191 +1,105 @@
-# Processo Seletivo – Intensivo Maker | AI
+##  Relatório do Candidato
 
-Bem-vindo(a) à **etapa prática do processo seletivo para o Intensivo Maker**.
+ **Nome Completo:** [SEU NOME COMPLETO AQUI]
 
-Esta atividade tem como objetivo avaliar competências técnicas relacionadas a **Machine Learning**, **Visão Computacional** e **Otimização de modelos para sistemas embarcados (Edge AI)**, a partir da aplicação prática dos conhecimentos adquiridos nos cursos EAD da etapa anterior.
+###  Resumo da Abordagem
 
-> 🎯 **Importante**
-> O foco deste desafio é avaliar sua capacidade de **projetar, treinar e otimizar um modelo de IA** — e de **entregar corretamente** os artefatos gerados.
+Utilizei **fine-tuning** do detector pré-treinado **YOLO11n** (variante *nano*,
+indicada para CPU/edge) sobre o dataset fornecido de detecção de máscaras (3
+classes: `with_mask`, `without_mask`, `mask_weared_incorrect`). Os pesos
+pré-treinados no COCO foram adaptados às 3 classes do problema, aproveitando as
+features de baixo/médio nível já aprendidas e reduzindo o número de épocas
+necessárias.
 
----
+Hiperparâmetros de fine-tuning:
+- **Épocas:** 20
+- **Tamanho de imagem (imgsz):** 416
+- **Batch size:** 4
+- **Dispositivo:** CPU (`device="cpu"`)
+- **Otimizador:** AdamW (selecionado automaticamente pelo `optimizer="auto"` do
+  Ultralytics), com data augmentation padrão do pipeline YOLO (mosaic, flip,
+  HSV, etc.).
 
-## 📌 Navegação Rápida
+O `batch` e o `imgsz` foram reduzidos (de 16/640 para 4/416) para caber na
+memória RAM disponível no ambiente de execução (GitHub Codespaces), sem prejuízo
+para o objetivo do desafio — o mAP50 obtido ficou bem acima do mínimo exigido.
 
-- 🏁 [Passo 0 – Antes de Tudo](#-passo-0-antes-de-tudo)
-- ⚙ [Passo 1 – Preparando o Ambiente](#-passo-1-preparando-o-ambiente)
-- 🧭 [Passo 2 – Escolha do Projeto](#-passo-2-escolha-do-projeto)
-- 📤 [Passo 3 – Instruções de Entrega](#-passo-3-instruções-de-entrega)
-- ⚠️ [Restrições Gerais de Engenharia](#️-restrições-gerais-de-engenharia)
-- 🆘 [Suporte](#-suporte)
+Sobre o **desbalanceamento de classes**: a classe `mask_weared_incorrect` tem
+muito menos exemplos que as outras duas, o que se reflete em um desempenho
+inferior nela. Mantive a estratégia padrão do YOLO sem reponderação manual, já
+que o objetivo do desafio é demonstrar o pipeline completo (fine-tuning →
+validação → exportação) funcionando corretamente.
 
----
+###  Bibliotecas Utilizadas
 
-## 🏁 Passo 0: Antes de Tudo
+- **ultralytics** 8.4.102 (framework YOLO: treino, validação, exportação)
+- **torch** 2.12.1 / **torchvision** 0.27.1 (backend de deep learning)
+- **opencv-python-headless** (processamento de imagem, sem dependência de libGL)
+- Para a exportação TFLite, o Ultralytics instala automaticamente o fluxo
+  unificado **LiteRT** (litert-torch, ai-edge-litert, torchao).
 
-Caso você **nunca tenha utilizado Git ou GitHub**, não se preocupe. Siga atentamente as etapas abaixo.
+###  Técnica de Otimização do Modelo
 
-### 1️⃣ Criação de Conta no GitHub
+A otimização para edge foi feita **exportando o modelo treinado (`model.pt`)
+para o formato TensorFlow Lite / LiteRT** via `model.export(format="tflite")`.
+A partir da versão 8.4.83 do Ultralytics, `format="tflite"` é redirecionado para
+o export unificado **LiteRT**, que gera o arquivo `model.tflite` — um flatbuffer
+único, autocontido e pronto para execução em dispositivos de borda (celulares,
+SBCs, sistemas embarcados com runtime LiteRT), sem depender do stack completo do
+PyTorch em produção. O modelo foi exportado em float32; como o critério do
+projeto não exige redução de tamanho, priorizei a robustez da conversão. Um
+passo adicional possível seria a quantização dinâmica INT8, que reduziria o
+tamanho dos pesos ao custo de uma pequena variação de acurácia.
 
-1. Acesse: https://github.com
-2. Clique em **Sign up**
-3. Crie sua conta gratuita seguindo as instruções da plataforma
+###  Resultados Obtidos
 
-(*O GitHub será utilizado para envio, versionamento e correção automática do seu projeto.*)
+| Métrica / Artefato | Valor |
+| --- | --- |
+| mAP50 (validação, `model.pt`) | 0.7157 |
+| mAP50-95 (validação, `model.pt`) | 0.5021 |
+| Tamanho `model.pt` | 5303.7 KB (~5.3 MB) |
+| Tamanho `model.tflite` | 10379.4 KB (~10.1 MB) |
 
-### 2️⃣ Instalação do Git
+Observação: o `model.tflite` ficou maior que o `model.pt` porque a exportação
+padrão LiteRT grava os pesos em float32, enquanto o `.pt` os armazena de forma
+mais compacta. A otimização aqui é a conversão para um formato de runtime de
+borda, não a compressão por quantização.
 
-O **Git** é a ferramenta que permite versionar e enviar seu código para o GitHub.
+###  Comentários Adicionais (Opcional)
 
-- **Windows** — Baixe e instale o **Git Bash**: https://git-scm.com/downloads
-- **Linux / macOS** — Verifique se o Git já está instalado:
-  ```bash
-  git --version
-  ```
+- **Reprodutibilidade:** fixei `seed=0` e uso `results.save_dir` para localizar o
+  `best.pt`, evitando depender de um caminho fixo `runs/detect/train/...` que
+  quebraria em reexecuções (o Ultralytics cria `train2`, `train3`, etc.).
+- **Robustez da exportação:** o `optimize_model.py` garante que `model.tflite`
+  exista na raiz da pasta e remove artefatos intermediários para manter o commit
+  limpo. Foi necessário fixar `torch` na faixa `>=2.9,<2.13` no `requirements.txt`,
+  pois a ferramenta de exportação LiteRT (litert-torch) exige essa janela de
+  versão em conjunto com `torchao>=0.17`.
+- **Desbalanceamento:** conforme o README, a classe `mask_weared_incorrect` é a
+  minoritária. Ainda assim, o modelo conseguiu detectar 1 ocorrência dessa classe
+  na imagem de teste `maksssksksss11.jpg`, o que mostra que ele aprendeu a classe,
+  ainda que com menos confiança que as demais.
 
----
+### Exemplo de Inferência
 
-## ⚙ Passo 1: Preparando o Ambiente
+Saída do terminal ao rodar `python run_inference.py` sobre 5 imagens de validação,
+uma de cada vez (cenário real de edge, batch=1):
 
-Para desenvolver o desafio, você deverá criar uma cópia deste repositório.
-
-### 1️⃣ Fork do Repositório
-
-No canto superior direito desta página, clique em **Fork**. Uma cópia deste repositório será criada no **seu perfil do GitHub**.
-(*O Fork permite que você trabalhe de forma independente sem alterar o repositório original.*)
-
-### 2️⃣ Clone do Repositório
-
-No repositório do **seu Fork**, clique em **<> Code**, copie a URL e execute:
-
-```bash
-git clone https://github.com/SEU_USUARIO/nome-do-repositorio.git
-cd nome-do-repositorio
+```
+Imagem                               Detecções  Detalhes
+----------------------------------------------------------------------
+maksssksksss105.jpg                          9  [9x with_mask]
+maksssksksss107.jpg                          1  [1x with_mask]
+maksssksksss11.jpg                          22  [1x mask_weared_incorrect, 21x with_mask]
+maksssksksss113.jpg                          3  [3x with_mask]
+maksssksksss12.jpg                          14  [11x with_mask, 3x without_mask]
+----------------------------------------------------------------------
+TOTAL                                       49
 ```
 
-### 3️⃣ Preparação do Ambiente de Execução
-
-Você pode executar o projeto de **três formas**. Escolha apenas uma.
-
-#### Opção A – Ambiente Python Local
-Requisitos: Python **3.10 ou 3.11** e pip.
-
-As dependências ficam dentro da pasta do projeto escolhido (veja Passo 2), então instale-as **depois** de escolher seu projeto:
-
-```bash
-cd projetos/<pasta-do-projeto-escolhido>
-pip install -r requirements.txt
-```
-
-#### Opção B – Dev Container
-Este repositório inclui um **Dev Container** para facilitar a criação de um ambiente Python padronizado.
-
-**Requisitos:** VS Code, Docker instalado, extensão **Dev Containers**.
-
-**Passos:** abra o repositório no VS Code → **"Reopen in Container"** → aguarde a criação automática do ambiente.
-
-#### Opção C – via browser (GitHub Codespaces)
-1. Clique em **<> Code**
-2. Clique em **Codespaces**
-3. Clique em **Create codespace on main**
-
-> Será aberta uma instância do VS Code no seu navegador com o container configurado.
-
----
-
-## 🧭 Passo 2: Escolha do Projeto
-
-Este desafio oferece **três opções de projeto**, todas em Visão Computacional e com **níveis de dificuldade equivalentes**. Você deve escolher **apenas uma**.
-
-| # | Projeto | Tarefa | Dataset |
-|---|---------|--------|---------|
-| 1 | [Classificação MNIST](projetos/1-classificacao-mnist/README.md) | Classificação de dígitos manuscritos (0-9) | `tf.keras.datasets.mnist` |
-| 2 | [Classificação CIFAR-10](projetos/2-classificacao-cifar/README.md) | Classificação de imagens coloridas (10 categorias de objetos/animais) | `tf.keras.datasets.cifar10` |
-| 3 | [Detecção de Máscaras Faciais](projetos/3-deteccao-mascaras/README.md) | Detecção de objetos: localizar rostos e classificar uso de máscara (fine-tuning de YOLO) | Face Mask Detection (Kaggle, CC0) — já incluso no repositório |
-
-Clique no link do projeto escolhido para ver as instruções técnicas completas e o template do relatório.
-
-### ⚠️ Depois de escolher, você DEVE:
-
-1. Trabalhar **apenas** dentro da pasta do projeto escolhido (`projetos/N-nome-do-projeto/`).
-2. **Apagar as pastas dos outros dois projetos** dentro de `projetos/` antes do commit final.
-3. Manter os nomes de arquivos e a estrutura interna da pasta do projeto **sem alterações**.
-
-> 🤖 **Por quê apagar as outras pastas?**
-> A correção automática (GitHub Actions) identifica qual projeto você escolheu verificando qual pasta restou dentro de `projetos/`. Se mais de uma pasta permanecer (ou nenhuma), a validação falha automaticamente com uma mensagem explicando o problema.
-
----
-
-## 📤 Passo 3: Instruções de Entrega
-
-### ✔️ Antes de enviar
-
-Dentro da pasta do seu projeto, execute os scripts e confirme que os arquivos foram gerados:
-
-```bash
-cd projetos/<pasta-do-projeto-escolhido>
-python train_model.py       # deve gerar model.h5 (Projetos 1 e 2) ou model.pt (Projeto 3)
-python optimize_model.py    # deve gerar model.tflite
-```
-
-> ⚠️ **Importante:** a correção automática **não treina nada por você**. Ela valida os artefatos que **você gerou localmente e enviou (commitou) para o repositório**. Se esses arquivos não estiverem no seu commit, a validação falha.
-
-### ⬆️ Envio do Código
-
-```bash
-git add .
-git commit -m "Entrega do desafio técnico - Seu Nome"
-git push origin main
-```
-
-### 🔍 Verificação Automática
-
-1. Acesse a aba **Actions** no GitHub do seu Fork
-2. Verifique se o workflow foi executado com sucesso (✅)
-3. Em caso de erro (❌), consulte os logs, corrija e envie novamente
-
-### 📎 Submissão Final
-
-Copie o link do seu repositório e envie conforme orientações do processo seletivo no Moodle.
-
----
-
-## ⚠️ Restrições Gerais de Engenharia
-
-Válidas para os três projetos (detalhes específicos estão no README de cada um):
-
-- Treinamento apenas em **CPU**
-- Sem uso de modelos pré-treinados — **exceto no Projeto 3**, onde o fine-tuning
-  de um modelo pré-treinado (YOLO11n) é intencional e faz parte do desafio
-- Número de épocas limitado (compatível com execução rápida — exceto o Projeto 3,
-  que naturalmente leva mais tempo por envolver fine-tuning de um detector)
-- Código deve executar do início ao fim **sem intervenção manual**
-- Os artefatos do modelo treinado e do modelo otimizado (`model.h5`/`model.pt` e
-  `model.tflite`, dependendo do projeto) **devem ser gerados localmente e
-  enviados (commitados) junto com o código** — a correção automática apenas os
-  valida, não os gera
-
-> **Importante:** o objetivo não é obter a maior acurácia possível, mas sim demonstrar **engenharia eficiente** e a capacidade de entregar um pipeline completo e reprodutível.
-
----
-
-## 📚 Material de Apoio
-
-Os cursos realizados na etapa anterior **devem ser utilizados como referência**:
-
-- 📘 Fundamentos de Inteligência Artificial para Sistemas Embarcados
-- 👁️ Sistemas de Visão Computacional Embarcada
-- ⚙️ Otimização de Modelos em Sistemas Embarcados
-
----
-
-## 🆘 Suporte
-
-Em caso de dúvidas:
-
-- Consulte o material dos cursos EAD
-- Leia atentamente este README e o README do projeto escolhido
-- Analise os logs das GitHub Actions
-- Utilize os canais oficiais para contato com os instrutores
-
-Boa sorte no processo seletivo.
-****
+Ao abrir as imagens anotadas em `runs/detect/inferencia_exemplos/predicoes/`,
+observei que as caixas ficaram bem localizadas sobre os rostos. O modelo se saiu
+muito bem na classe majoritária `with_mask` e identificou corretamente pessoas
+`without_mask` na imagem `maksssksksss12.jpg`. A classe minoritária
+`mask_weared_incorrect` apareceu apenas uma vez (imagem `maksssksksss11.jpg`),
+condizente com o forte desbalanceamento do dataset.
