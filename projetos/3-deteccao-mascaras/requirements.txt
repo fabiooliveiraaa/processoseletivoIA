@@ -1,1 +1,16 @@
-ultralytics>=8.4
+# ---------------------------------------------------------------------------
+# Projeto 3 — Detecção de Máscaras (YOLO)
+#
+# As versões abaixo são FIXAS de propósito. A exportação para TFLite usa o
+# fluxo LiteRT (litert-torch), que exige torch >=2.4,<2.13 junto de torchao.
+# Deixar o torch solto faz o ambiente usar o 2.13 (novo demais) e a exportação
+# falha com "get_cuda_generator_meta_val". Além disso, litert-torch é listado
+# aqui (e não instalado via AutoUpdate no meio da execução) para que já esteja
+# presente ANTES do Python iniciar — instalar durante a execução não tem efeito
+# no processo já carregado.
+# ---------------------------------------------------------------------------
+ultralytics==8.4.102
+torch==2.12.1
+torchvision==0.27.1
+litert-torch>=0.9.0
+opencv-python-headless
