@@ -1,86 +1,103 @@
-##  Relatório do Candidato
+## 📝 Relatório do Candidato
 
- **Nome Completo:** [SEU NOME COMPLETO AQUI]
+👤 **Nome Completo:** [SEU NOME COMPLETO AQUI]
 
-###  Resumo da Abordagem
+### 1️⃣ Resumo da Abordagem
 
 Utilizei **fine-tuning** do detector pré-treinado **YOLO11n** (variante *nano*,
 indicada para CPU/edge) sobre o dataset fornecido de detecção de máscaras (3
-classes: `with_mask`, `without_mask`, `mask_weared_incorrect`). Os pesos
-pré-treinados no COCO foram adaptados às 3 classes do problema, aproveitando as
-features de baixo/médio nível já aprendidas e reduzindo o número de épocas
-necessárias.
+classes: `with_mask`, `without_mask`, `mask_weared_incorrect`). Parti dos pesos
+pré-treinados no COCO (`yolo11n.pt`) e os adaptei às 3 classes do problema,
+aproveitando as *features* de baixo/médio nível já aprendidas e reduzindo o
+número de épocas necessárias em relação a um treino do zero.
 
-Hiperparâmetros de fine-tuning:
-- **Épocas:** 20
-- **Tamanho de imagem (imgsz):** 416
-- **Batch size:** 4
-- **Dispositivo:** CPU (`device="cpu"`)
-- **Otimizador:** AdamW (selecionado automaticamente pelo `optimizer="auto"` do
-  Ultralytics), com data augmentation padrão do pipeline YOLO (mosaic, flip,
-  HSV, etc.).
+Hiperparâmetros de fine-tuning e a justificativa técnica de cada escolha:
 
-O `batch` e o `imgsz` foram reduzidos (de 16/640 para 4/416) para caber na
-memória RAM disponível no ambiente de execução (GitHub Codespaces), sem prejuízo
-para o objetivo do desafio — o mAP50 obtido ficou bem acima do mínimo exigido.
+- **Épocas = 20:** YOLO converge rápido em fine-tuning. O mAP50 já ultrapassou 0.30 (o mínimo exigido) logo na 1ª época e estabilizou perto de 0.72 ao fim das 20, sem sinais de overfitting.
+- **imgsz = 416:** reduzido de 640 para 416 para caber na memória RAM do ambiente de execução (GitHub Codespaces/Actions) e acelerar o treino em CPU, mantendo resolução suficiente para os rostos.
+- **batch = 4:** foi decisivo. Com batch 16 o processo era encerrado por falta de memória (`Terminated`); com 4 o uso de RAM estabilizou sem prejudicar a convergência.
+- **device = cpu:** restrição do desafio (treino apenas em CPU).
+- **optimizer = auto (→ AdamW):** deixei o Ultralytics escolher automaticamente, que selecionou AdamW com `lr0 ≈ 0.00143`, adequado para um fine-tuning estável.
+- **seed = 0:** para reprodutibilidade entre execuções.
 
-Sobre o **desbalanceamento de classes**: a classe `mask_weared_incorrect` tem
-muito menos exemplos que as outras duas, o que se reflete em um desempenho
-inferior nela. Mantive a estratégia padrão do YOLO sem reponderação manual, já
-que o objetivo do desafio é demonstrar o pipeline completo (fine-tuning →
-validação → exportação) funcionando corretamente.
+O dataset é **desbalanceado**: `mask_weared_incorrect` tem pouquíssimos exemplos
+(apenas 19 instâncias na validação, contra 593 de `with_mask`). Mantive a
+estratégia padrão do YOLO sem reponderação manual, já que o objetivo é demonstrar
+o pipeline completo, e registro o impacto desse desbalanceamento na seção 4.
 
-###  Bibliotecas Utilizadas
+### 2️⃣ Bibliotecas Utilizadas
 
-- **ultralytics** 8.4.102 (framework YOLO: treino, validação, exportação)
-- **torch** 2.12.1 / **torchvision** 0.27.1 (backend de deep learning)
-- **opencv-python-headless** (processamento de imagem, sem dependência de libGL)
-- Para a exportação TFLite, o Ultralytics instala automaticamente o fluxo
-  unificado **LiteRT** (litert-torch, ai-edge-litert, torchao).
+- **ultralytics 8.4.102** — framework YOLO (treino, validação, exportação)
+- **torch 2.12.1** — backend de deep learning
+- **torchvision 0.27.1** — operações de visão computacional (dependência do YOLO)
+- **litert-torch 0.9.1** — conversão PyTorch → TFLite/LiteRT
+- **opencv-python-headless** — processamento de imagem sem dependência de libGL
 
-###  Técnica de Otimização do Modelo
+As versões de `torch`/`torchvision`/`litert-torch` foram **fixadas** no
+`requirements.txt` de propósito (ver seção 5).
+
+### 3️⃣ Técnica de Otimização do Modelo
 
 A otimização para edge foi feita **exportando o modelo treinado (`model.pt`)
 para o formato TensorFlow Lite / LiteRT** via `model.export(format="tflite")`.
-A partir da versão 8.4.83 do Ultralytics, `format="tflite"` é redirecionado para
-o export unificado **LiteRT**, que gera o arquivo `model.tflite` — um flatbuffer
-único, autocontido e pronto para execução em dispositivos de borda (celulares,
-SBCs, sistemas embarcados com runtime LiteRT), sem depender do stack completo do
-PyTorch em produção. O modelo foi exportado em float32; como o critério do
-projeto não exige redução de tamanho, priorizei a robustez da conversão. Um
-passo adicional possível seria a quantização dinâmica INT8, que reduziria o
-tamanho dos pesos ao custo de uma pequena variação de acurácia.
+A partir da versão 8.4.83 do Ultralytics, `format="tflite"` é automaticamente
+redirecionado para o export unificado **LiteRT** (aviso emitido no log), que gera
+o arquivo `model.tflite` — um *flatbuffer* único, autocontido e pronto para
+execução em dispositivos de borda (celulares, SBCs, sistemas embarcados com
+runtime LiteRT/XNNPACK), sem depender do stack completo do PyTorch em produção.
 
-###  Resultados Obtidos
+O modelo foi exportado em precisão **float32**, priorizando a robustez e a
+fidelidade numérica da conversão (o mAP50 do `.tflite` fica praticamente idêntico
+ao do `.pt`). Como passo adicional de compressão, o fluxo LiteRT também oferece
+**quantização dinâmica INT8** (`quantize="w8a32"`: pesos em int8, ativações em
+FP32), que reduziria o tamanho dos pesos ao custo de uma pequena variação de
+acurácia.
 
-| Métrica / Artefato | Valor |
-| --- | --- |
-| mAP50 (validação, `model.pt`) | 0.7157 |
-| mAP50-95 (validação, `model.pt`) | 0.5021 |
-| Tamanho `model.pt` | 5303.7 KB (~5.3 MB) |
-| Tamanho `model.tflite` | 10379.4 KB (~10.1 MB) |
+### 4️⃣ Resultados Obtidos
 
-Observação: o `model.tflite` ficou maior que o `model.pt` porque a exportação
-padrão LiteRT grava os pesos em float32, enquanto o `.pt` os armazena de forma
-mais compacta. A otimização aqui é a conversão para um formato de runtime de
-borda, não a compressão por quantização.
+Métricas de detecção no conjunto de validação (model.pt):
+- **Geral (todas as classes):** mAP50 = 0.726 | mAP50-95 = 0.504
+- **with_mask:** mAP50 = 0.947 | mAP50-95 = 0.647
+- **without_mask:** mAP50 = 0.718 | mAP50-95 = 0.453
+- **mask_weared_incorrect:** mAP50 = 0.504 | mAP50-95 = 0.405
 
-###  Comentários Adicionais (Opcional)
+Tamanho dos artefatos:
+- **model.pt:** 5303.8 KB (~5.2 MB)
+- **model.tflite:** 10379.4 KB (~10.1 MB)
 
-- **Reprodutibilidade:** fixei `seed=0` e uso `results.save_dir` para localizar o
-  `best.pt`, evitando depender de um caminho fixo `runs/detect/train/...` que
-  quebraria em reexecuções (o Ultralytics cria `train2`, `train3`, etc.).
-- **Robustez da exportação:** o `optimize_model.py` garante que `model.tflite`
-  exista na raiz da pasta e remove artefatos intermediários para manter o commit
-  limpo. Foi necessário fixar `torch` na faixa `>=2.9,<2.13` no `requirements.txt`,
-  pois a ferramenta de exportação LiteRT (litert-torch) exige essa janela de
-  versão em conjunto com `torchao>=0.17`.
-- **Desbalanceamento:** conforme o README, a classe `mask_weared_incorrect` é a
-  minoritária. Ainda assim, o modelo conseguiu detectar 1 ocorrência dessa classe
-  na imagem de teste `maksssksksss11.jpg`, o que mostra que ele aprendeu a classe,
-  ainda que com menos confiança que as demais.
+Discussão: o `model.pt` tem desempenho muito bom na classe majoritária
+`with_mask` (mAP50 0.947) e razoável em `without_mask` (0.718). Como esperado, a
+classe minoritária `mask_weared_incorrect` teve o pior desempenho (mAP50 0.504) —
+reflexo direto do forte desbalanceamento do dataset (apenas 19 instâncias na
+validação). Sobre os tamanhos, o `.tflite` ficou **maior** que o `.pt` porque a
+exportação LiteRT padrão grava os pesos em float32, enquanto o `.pt` os armazena
+de forma mais compacta; a otimização aqui é a conversão para um formato de runtime
+de borda, não a compressão por quantização.
 
-### Exemplo de Inferência
+### 5️⃣ Comentários Adicionais
+
+- **Dificuldade real — conflito de versões na exportação:** a maior dificuldade
+  não foi o treino, e sim a exportação para TFLite. A ferramenta LiteRT
+  (`litert-torch`) exige `torch >=2.4,<2.13` em conjunto com `torchao>=0.17`.
+  Com o `torch 2.13` (padrão do ambiente) a exportação falhava com
+  `ImportError: cannot import name 'get_cuda_generator_meta_val'`, e com o `2.4.1`
+  falhava com `ValueError: infer_schema (...) unsupported default value`. A
+  solução foi **fixar `torch==2.12.1`** e **declarar `litert-torch` no
+  `requirements.txt`**, garantindo que as versões corretas sejam instaladas
+  *antes* de o script rodar (instalar via AutoUpdate no meio da execução não tem
+  efeito, pois o torch já estava carregado em memória).
+- **Decisão técnica — memória:** reduzi `batch` (16 → 4) e `imgsz` (640 → 416)
+  após o treino ser encerrado por estouro de RAM (`Terminated`) no ambiente CPU.
+- **Robustez do pipeline:** uso `results.save_dir` para localizar o `best.pt`
+  (em vez de um caminho fixo `runs/detect/train/`, que quebraria em reexecuções),
+  e o `optimize_model.py` garante que `model.tflite` exista na raiz e remove
+  artefatos intermediários, mantendo o commit limpo.
+- **Limitação do modelo:** por ser `nano` e treinado em baixa resolução (416) e
+  poucas épocas, o modelo tende a errar mais em rostos pequenos/distantes e na
+  classe minoritária. Para produção, aumentaria `imgsz`, épocas e aplicaria
+  técnicas de balanceamento (oversampling ou *class weights*).
+
+### 6️⃣ Exemplo de Inferência
 
 Saída do terminal ao rodar `python run_inference.py` sobre 5 imagens de validação,
 uma de cada vez (cenário real de edge, batch=1):
@@ -97,9 +114,11 @@ maksssksksss12.jpg                          14  [11x with_mask, 3x without_mask]
 TOTAL                                       49
 ```
 
-Ao abrir as imagens anotadas em `runs/detect/inferencia_exemplos/predicoes/`,
-observei que as caixas ficaram bem localizadas sobre os rostos. O modelo se saiu
-muito bem na classe majoritária `with_mask` e identificou corretamente pessoas
-`without_mask` na imagem `maksssksksss12.jpg`. A classe minoritária
-`mask_weared_incorrect` apareceu apenas uma vez (imagem `maksssksksss11.jpg`),
-condizente com o forte desbalanceamento do dataset.
+Caso observado: na imagem `maksssksksss11.jpg`, uma cena com muitas pessoas, o
+modelo detectou 22 rostos e — apesar do forte desbalanceamento — conseguiu
+identificar **1 ocorrência da classe minoritária `mask_weared_incorrect`**, o que
+mostra que ele aprendeu a classe, ainda que com menor recall. Já em
+`maksssksksss12.jpg` distinguiu corretamente pessoas com e sem máscara (11x
+`with_mask` e 3x `without_mask`). Ao abrir as imagens anotadas em
+`runs/detect/inferencia_exemplos/predicoes/`, as *bounding boxes* estavam bem
+posicionadas sobre os rostos, com maior confiança na classe majoritária.
